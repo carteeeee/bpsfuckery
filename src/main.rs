@@ -39,7 +39,11 @@ fn read_metadata(file: &mut File) -> String {
     }
 }
 
-fn read_actions(file: &mut File) {
+fn read_actions(file: &mut File) -> u64 {
+    let mut output_offset: u64 = 0;
+    let mut source_offset: i64 = 0;
+    let mut target_offset: i64 = 0;
+    let mut actions: u64 = 0;
     loop {
         let pos = file
             .stream_position()
@@ -48,14 +52,75 @@ fn read_actions(file: &mut File) {
         if pos >= len - 12 {
             break;
         }
+
         let data = vle_decode(file);
-        let command = data & 0b11;
+        let command = data & 3;
         let length = (data >> 2) + 1;
 
-        let mut take = file.take(length);
-        let mut buf = vec![];
-        let _ = take.read_to_end(&mut buf);
+        match command {
+            0 => {
+                println!(
+                    "Copy starting from {} with length {} from source to target.",
+                    output_offset, length
+                );
+                output_offset += length;
+            }
+            1 => {
+                println!(
+                    "Copy the following {} bytes from the patch file to the target.",
+                    length
+                );
+
+                let mut take = file.take(length);
+                let mut buf = vec![];
+                let _ = take.read_to_end(&mut buf);
+                println!("{:?}", buf);
+
+                /*let _ = file.seek_relative(
+                    length
+                        .try_into()
+                        .expect("whoopsies couldnt convert u64 to i64"),
+                ); // temporary */
+                output_offset += length;
+            }
+            2 => {
+                let data2 = vle_decode(file);
+                source_offset += (if data2 & 1 != 0 { -1i64 } else { 1i64 }) * (data2 >> 1) as i64;
+                println!(
+                    "Copy starting from {} with length {} in source to {} in target.",
+                    output_offset, length, source_offset
+                );
+                output_offset += length;
+                source_offset += length as i64;
+            }
+            3 => {
+                let data2 = vle_decode(file);
+                target_offset += (if data2 & 1 != 0 { -1i64 } else { 1i64 }) * (data2 >> 1) as i64;
+                println!(
+                    "Copy starting from {} with length {} in target to {} in target.",
+                    output_offset, length, target_offset
+                );
+                output_offset += length;
+                target_offset += length as i64;
+            }
+            _ => panic!("holy fucking shit explod now!"),
+        }
+
+        actions += 1;
     }
+
+    actions
+}
+
+fn read_crcs(file: &mut File) -> ([u8; 4], [u8; 4], [u8; 4]) {
+    let mut buf = [0; 4];
+    let _ = file.read(&mut buf);
+    let sc = buf;
+    let _ = file.read(&mut buf);
+    let tc = buf;
+    let _ = file.read(&mut buf);
+    let pc = buf;
+    (sc, tc, pc)
 }
 
 fn main() {
@@ -67,8 +132,14 @@ fn main() {
 
     let sizes = read_sizes(&mut file);
     let metadata = read_metadata(&mut file);
+    let actions = read_actions(&mut file);
+    let crcs = read_crcs(&mut file);
 
-    println!("Input File Size: {}", sizes.0);
+    println!("Input File Size:  {}", sizes.0);
     println!("Output File Size: {}", sizes.1);
-    println!("Metadata: {}", metadata);
+    println!("Metadata:         {}", metadata);
+    println!("Total Actions:    {}", actions);
+    println!("Source CRC:       {:02X?}", crcs.0);
+    println!("Target CRC:       {:02X?}", crcs.1);
+    println!("Patch CRC:        {:02X?}", crcs.2);
 }
